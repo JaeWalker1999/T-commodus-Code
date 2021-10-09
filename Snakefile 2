@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+import pathlib2
+
+##needed to get BUSCO running in new folder
+def resolve_path(x):
+	return(str(pathlib2.Path(x).resolve(strict=False)))
+
+## Some commands were done in bash before converting to python ##
+
+##############
+# CONTAINERS #
+##############
+fastqc_container = "docker://biocontainers/fastqc:v0.11.9_cv8"
+busco_container = "docker://ezlabgva/busco:v5.2.1_cv1"
+
+#########
+# RULES #
+#########
+
+rule target:
+	input:
+		"basecalled_cricket_embryos_RNA/basecalled_cricket_embryos_RNA2021-03-31",
+		"cricket_pass_basecall.fastq.gz",
+		"rnabloom.transcripts.fa",
+		"yacrd_rnabloom.transcripts.fa",
+
+
+
+##rule guppy_basecalling:
+#	nohup singularity exec --nv -B /Volumes local_containers/ont-containers_guppy-cpu_4.2.2.sif \
+#guppy_basecaller_supervisor --port 10.96.89.101:5555 \
+#--num_clients 5 \
+#--input_path /Volumes/archive/deardenlab/minion/raw/Cricket_embryos_RNA/ \
+#--save_path "/Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/basecalled_cricket_embryos_RNA$(date -I)" \
+#--flowcell "FLO-MIN106" \
+#--kit "SQK-DCS109" \
+#--recursive \
+#--trim_strategy dna \
+#--qscore_filtering \
+#--compress_fastq \
+#2>&1 \
+#| tee "Cricket_embryos_RNA$(date -I).log"
+
+rule guppy_basecalling:
+	input:
+		"minion/raw/Cricket_embryos_RNA"
+	output:
+		"basecalled_cricket_embryos_RNA/basecalled_cricket_embryos_RNA2021-03-31"
+	log:
+		"Cricket_embryos_RNA2021-03-31.log"
+	shell:
+		"/Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/local_containers/ont-containers_guppy-cpu_4.2.2.sif "
+		"-i {input} "
+		"-s {output} "
+		"--flowcell FLO-MIN106 "
+		"--kit SQK-DCS109 "
+		"--recursive "
+		"--trim_strategy dna "
+		"--qscore_filtering "
+		"--compress_fastq "
+		"&> {log}"
+
+
+rule passed_guppy_basecalls:
+	shell:
+		"cat *runid*.fastq.gz > cricket_pass_basecall.fastq.gz"
+
+## rule number_passed_reads
+##zcat cricket_pass_basecall.fastq.gz | wc -l | awk '{print $1/4}'
+
+## rule FASTQC_passed_basecalls
+#fastqc -t 14 -o . ../pass/cricket_pass_basecall.fastq.gz
+
+rule FASTQC_passed_basecalls:
+	input:
+		"pass/basecalled_cricket_embryos_RNA/cricket_pass_basecall.fastq.qz"
+	output:
+		"basecalled_cricket_embryos_RNA/cricket_pass_basecall_fastqc.zip"
+	params:
+		outdir = directory("basecalled_cricket_embryos_RNA")
+	threads:
+		14
+	singularity:
+		fastqc_container
+	shell:
+		"fastqc --outdir {params.outdir} {input} "
+		"-t {threads}"
+
+##rule porechop_nanopore_reads
+#nohup singularity exec -B /Volumes porechop.sif porechop -i /Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/cricket_pass_basecall.fastq.gz -o /Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/porechop_cricket_embryos_13_4_21_no4.fastq.gz &> nohup.out &
+
+rule porechop_nanopore_reads:
+	input:
+		"basecalled_cricket_embryos_RNA/cricket_pass_basecall.fastq.gz"
+	output:
+		"basecalled_cricket_embryos_RNA/porechop_cricket_embryos_13_4_21_no4.fastq.gz"
+	shell:
+		"/Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/local_containers/porechop.sif "
+		"porechop "
+		"-i {input} "
+		"-o {output} "
+
+
+##rule FASTQC_porechop_results
+#fastqc -t 14 -o . ../basecalled_cricket_embryos_RNA/porechop_cricket_embryos_13_4_21_no4.fastq.gz
+
+rule FASTQC_porechop_result:
+	input:
+		"basecalled_cricket_embryos_RNA/porechop_cricket_embryos_13_4_21_no4.fastq.gz"
+	output:
+		"porechop_cricket_embryos_13_4_21_no4_fastqc.zip"
+	params:
+		outdir =directory("basecalled_cricket_embryos_RNA")
+	threads:
+		14
+	singularity:
+		fastqc_container
+	shell:
+		"fastqc --outdir {params.outdir} {input} "
+		"-t {threads}"
+
+## rule minimap_nanopore_reads
+#minimap2 -x ava-ont -g 500 porechop_cricket_embryos_13_4_21_no4.fastq.gz porechop_cricket_embryos_13_4_21_no4.fastq.gz > overlap.paf
+
+rule minimap_nanopore_reads:
+	input:
+		"basecalled_cricket_embryos_RNA/porechop_cricket_embryos_13_4_21_no4.fastq.gz"
+	output:
+		"basecalled_cricket_embryos_RNA/overlap.paf"
+	shell:
+		"minimap2 "
+		"-x ava-ont "
+		"-g 500 "
+		"{input} "
+		"{output} "		
+
+## rule yacrd_nanopore_reads
+#yacrd -i overlap.paf -o report.yacrd -c 4 -n 0.4 scrubb -i porechop_cricket_embryos_13_4_21_no4.fastq.gz -o reads.scrubb.fasta
+
+rule yacrd_nanopore_reads:
+	input:
+		"basecalled_cricket_embryos_RNA/overlap.paf"
+	output:
+		"basecalled_cricket_embryos_RNA/report.yacrd"
+	params:
+		sub_input = "porechop_cricket_embryos_13_4_21_no4.fastq.gz "
+		sub_output = "reads.scrubb.fastq.gz"
+	shell:
+		"yacrd "
+		"--input {input} "
+		"--output {output} "
+		"-c 4 "
+		"-n 0.4 "
+		"scrubb -i {params.sub_input} -o {params.sub_output}"
+
+## rule run_RNABloom "/Volumes/archive/deardenlab/guhlin/software/RNA-Bloom_v1.3.1/rnabloom "
+rule run_RNABloom:
+	input:
+		"porechop_cricket_embryos_13_4_21_no4.fastq.gz"
+	output:
+		"rnabloom.transcripts.fa"
+	params:
+		outdir = "basecalled_cricket_embryos_RNA/first"
+	shell:
+		"java "
+		"-jar RNA-Bloom.jar "
+		"-long {input} "
+		"--revcomp-long "
+		"-ntcard "
+		"-t 64 "
+		"-outdir {params.outdir}"
+
+
+rule run_yacrd_RNABloom:
+	input:
+		"basecalled_cricket_embryos_RNA/reads.scrubb.fastq.gz"
+	output:
+		"yacrd_rnabloom.transcripts.fa"
+	params:
+		outdir = "basecalled_cricket_embryos_RNA/yacrd_rnabloom"
+	shell:
+		"java "
+		"-jar RNA-Bloom.jar "
+		"-long {input} "
+		"--revcomp-long "
+		"-ntcard "
+		"-t 64 "
+		"-outdir {params.outdir}"
+
+## rule run_RNABloom_BUSCOs
+#busco --in yacrd_rnabloom.transcripts.fa -o cricket_busco_yacrd -f --cpu 64 --auto-lineage --long -m tran
+rule run_RNABloom_BUSCO:
+	input:
+		transcripts = "first/rnabloom.transcripts.fa"
+	output:
+		"cricket_busco/short_summary.specific.insecta_odb10.cricket_busco.txt"
+	log:
+		str(pathlib2.Path(resolve_path("guhlin/cricket-rnabloom/"),
+							"busco_359322.log"))
+	params:
+		wd = "cricket-rnabloom/cricket_busco"
+		outdir = "cricket_busco",
+		rnabloom_transcripts = lambda wildcards, input: resolve_path(input.transcripts)
+	singularity:
+		busco_container
+	threads:
+		64
+	shell:
+		"cd {params.wd} || exit 1 ; "
+		"busco "
+		"--in {params.transcripts} "
+		"--out {params.outdir} "
+		"--auto-lineage "
+		"--cpu {threads} "
+		"--mode transcriptome "
+		"--long "
+		"-f "
+		"-m "
+		"&> {log}"
+
+
+rule run_yacrd_RNABloom_BUSCO:
+	input:
+		transcripts = "yacrd_rnabloom.transcripts.fa"
+	output:
+		"cricket_busco_yacrd/short_summary.specific.insecta_odb10.cricket_busco_yacrd.txt"
+	log:
+		str(pathlib2.Path(resolve_path("guhlin/cricket-rnabloom/"),
+							"busco_2456275.log"))
+	params:
+		wd = "cricket-rnabloom/cricket_busco"
+		outdir = "cricket_busco",
+		rnabloom_transcripts = lambda wildcards, input: resolve_path(input.transcripts)
+	singularity:
+		busco_container
+	threads:
+		64
+	shell:
+		"cd {params.wd} || exit 1 ; "
+		"busco "
+		"--in {params.transcripts} "
+		"--out {params.outdir} "
+		"--auto-lineage "
+		"--cpu {threads} "
+		"--mode transcriptome "
+		"--long "
+		"-f "
+		"-m "
+		"&> {log}"
+
+
+## rule emapper_annotation /Volumes/archive/deardenlab/guhlin/cricket-rnabloom/cmd.sh 
+## /Volumes/archive/deardenlab/guhlin/software/eggnog-mapper/emapper.py 
+#--cpu 64 
+#-i /Volumes/scratch/deardenlab/basecalled_cricket_embryos_RNA/first/rnabloom.transcripts.fa 
+#--itype CDS 
+#-o cricket_emapper
+#/Volumes/archive/deardenlab/guhlin/software/eggnog-mapper-2.0.1/emapper.py \
+
+
+rule nanopore_transcriptome_emapper:
+	input:
+		nanopore_transcriptome = "first/rnabloom.transcripts.fa"
+	output:
+		"cricket-rnabloom/cricket_emapper.emapper.annotations.zst"
+	params:
+		wd = "guhlin/cricket-rnabloom",
+		prefix = "cricket_emapper"
+	threads:
+		64
+	shell:
+		"/Volumes/archive/deardenlab/guhlin/software/eggnog-mapper/emapper.py "
+		"--cpu {threads} "
+		"-i {input.nanopore_transcriptome} "
+		"--itype CDS "
+		"-o {output.prefix} "
+		"--output_dir {params.wd}"
+
+
+
+
+
+
+
